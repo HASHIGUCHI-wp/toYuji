@@ -21,7 +21,7 @@ omega_rote = 20.0              # 角速度
 
 la, mu = young * nu / ((1+nu) * (1-2*nu)) , young / (2 * (1+nu))
 sound_s = ti.sqrt((la + 2 * mu) / rho)  
-max_number = 100000         # ループ回数
+max_number = 250000         # ループ回数
 output_span = 1000          # 出力の間隔
 dt_max = 0.1 * dx / sound_s
 dt = 3.4e-6
@@ -136,20 +136,9 @@ class elas_body():
             bottom_iz = base_z_bottom + _iz
             upper_iz = self.base_z_upper[None] + _iz - grabing
             self.p_I[ix, iy, bottom_iz] = ti.Vector([0.0, 0.0, 0.0])
-            # self.p_I[ix, iy, upper_iz] = self.m_I[ix, iy, upper_iz] * ti.Vector([- pos_I_y, pos_I_x, 0.0]) * omega_rote
             self.p_I[ix, iy, upper_iz].x = self.m_I[ix, iy, upper_iz] * - pos_I_y * omega_rote
             self.p_I[ix, iy, upper_iz].y = self.m_I[ix, iy, upper_iz] * pos_I_x * omega_rote
             
-        # for ixiy_iz in range(nx * ny * bound):
-        #     ixiy, _iz = ixiy_iz % (nx * ny), ixiy_iz // (nx * ny)
-        #     ix, iy = ixiy % nx, ixiy // nx
-        #     pos_I_x, pos_I_y = dx * ix + area_start.x, dx * iy + area_start.y
-        #     bottom_iz = base_z_bottom + _iz
-        #     upper_iz = base_z_upper + _iz
-        #     self.p_I[ix, iy, bottom_iz] = ti.Vector([0.0, 0.0, 0.0])
-        #     # self.p_I[ix, iy, upper_iz] = self.m_I[ix, iy, upper_iz] * ti.Vector([- pos_I_y, pos_I_x, 0.0]) * omega_rote
-        #     self.p_I[ix, iy, upper_iz].x = self.m_I[ix, iy, upper_iz] * - pos_I_y * omega_rote
-        #     self.p_I[ix, iy, upper_iz].y = self.m_I[ix, iy, upper_iz] * pos_I_x * omega_rote
             
                     
     @ti.kernel
@@ -175,17 +164,16 @@ class elas_body():
             self.pos_p[p] += dt * self.vel_p[p]
             self.C_p[p] = new_C_p
     
+    @ti.kernel
     def cal_base_z_upper(self):
         self.ave_z_upper[None] = 0.0
-        self.get_ave_z_upper()
-        self.base_z_upper[None] = int((self.ave_z_upper[None] - area_start.z) * inv_dx - 0.5)
-        
-        
-    @ti.kernel
-    def get_ave_z_upper(self):
         for _p in range(num_p_upper):
             p = p_upper[_p]
             self.ave_z_upper[None] += self.pos_p[p].z / num_p_upper
+        self.base_z_upper[None] = int((self.ave_z_upper[None] - area_start.z) * inv_dx - 0.5)
+        
+        
+        
     
     def export_vtk(self, file_name):
         points = self.pos_p.to_numpy()
