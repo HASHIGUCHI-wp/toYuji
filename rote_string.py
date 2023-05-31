@@ -1,3 +1,5 @@
+# 荷重制御側の面を変位をそろえる
+
 import numpy as np
 import taichi as ti
 import datetime
@@ -16,12 +18,13 @@ young = 5.0e8   # Young率
 nu = 0.34       # ポアソン比
 rho = 4e1       # 密度
 gi = ti.Vector([0.0, 0.0, 0.0]) # 重力などの体積力
-bottom_z, upper_z = 0.0, 10.0   # 紐の底面と上面のz座標
+# bottom_z, upper_z = 0.0, 10.0   # 紐の底面と上面のz座標
+bottom_z, upper_z = 0.0, 30.0   # 紐の底面と上面のz座標
 omega_rote = 20.0              # 角速度
 
 la, mu = young * nu / ((1+nu) * (1-2*nu)) , young / (2 * (1+nu))
 sound_s = ti.sqrt((la + 2 * mu) / rho)  
-max_number = 250000         # ループ回数
+max_number = 500000         # ループ回数
 output_span = 1000          # 出力の間隔
 dt_max = 0.1 * dx / sound_s
 dt = 3.4e-6
@@ -30,9 +33,9 @@ print("dt_max", dt_max)
 print("dt", dt)     # dtをdt_max以下に設定
 
 bound = 3
-grabing = 3
+grabing = 5 # 3以上は必須
 area_start = ti.Vector([-2.0, -2.0, bottom_z - bound * dx])
-box_size = ti.Vector([4.0, 4.0, upper_z + 2 * bound * dx])
+box_size = ti.Vector([7.0, 7.0, upper_z + 2 * bound * dx])
 nx, ny, nz = int(box_size.x * inv_dx) + 1, int(box_size.y * inv_dx) + 1, int(box_size.z * inv_dx) + 1
 base_z_bottom = int((bottom_z - area_start.z) * inv_dx - 0.5)
 
@@ -41,7 +44,8 @@ base_z_bottom = int((bottom_z - area_start.z) * inv_dx - 0.5)
 file_name = datetime.datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
 folder_name = os.path.splitext(os.path.basename(__file__))[0]
 dr = './results/' + folder_name+'/{}'.format(file_name)
-msh = meshio.read('./mesh_file/FourWire.msh')       # メッシュファイルの読み込み
+# msh = meshio.read('./mesh_file/FourWire.msh')       # メッシュファイルの読み込み
+msh = meshio.read('./mesh_file/FourWireLen30.msh')       # メッシュファイルの読み込み
 
 num_p = msh.points.shape[0]
 num_t = msh.cells_dict["tetra"].shape[0]
@@ -83,7 +87,9 @@ class elas_body():
         self.pos_p_rest.from_numpy(msh.points)
         self.tN_pN.from_numpy(msh.cells_dict[self.ELE])
         self.base_z_upper = ti.field(dtype=ti.i32, shape=())
-        self.ave_z_upper = ti.field(dtype=float, shape=())     
+        self.ave_p_z_upper = ti.field(dtype=float, shape=(grabing))
+        self.ave_m_z_upper = ti.field(dtype=float, shape=(grabing))
+        self.num_p_upper = ti.field(dtype=ti.i32, shape=(grabing))
            
     @ti.kernel
     def cal_m_p_f_p_ext(self):
@@ -127,17 +133,39 @@ class elas_body():
                         self.m_I[ix, iy, iz] += weight * self.m_p[p]
                         self.p_I[ix, iy, iz] += weight * (self.m_p[p] * (self.vel_p[p] + self.C_p[p] @ dist) + dt * (f_p_int + self.f_p_ext[p]))
                         
+    
+    @ti.kernel
+    def cal_ave_p_z(self):
+        for ixiy_iz in range(nx * ny * grabing):
+            ixiy, _iz = ixiy_iz % (nx * ny), ixiy_iz // (nx * ny)
+            ix, iy = ixiy % nx, ixiy // nx
+            upper_iz = self.base_z_upper[None] + _iz - grabing + bound
+            self.ave_p_z_upper[_iz] += self.p_I[ix, iy, upper_iz].z
+            self.ave_m_z_upper[_iz] += self.m_I[ix, iy, upper_iz]
+            self.num_p_upper[_iz] += 1
+            
+        for _iz in range(grabing):
+            self.ave_p_z_upper[_iz] /= self.num_p_upper[_iz] 
+            self.ave_m_z_upper[_iz] /= self.num_p_upper[_iz] 
+            
+                        
     @ti.kernel
     def grid_op(self):
-        for ixiy_iz in range(nx * ny * (bound + grabing)):
+        for ixiy_iz in range(nx * ny * (grabing)):
             ixiy, _iz = ixiy_iz % (nx * ny), ixiy_iz // (nx * ny)
             ix, iy = ixiy % nx, ixiy // nx
             pos_I_x, pos_I_y = dx * ix + area_start.x, dx * iy + area_start.y
             bottom_iz = base_z_bottom + _iz
-            upper_iz = self.base_z_upper[None] + _iz - grabing
+            upper_iz = self.base_z_upper[None] + _iz - grabing + bound
             self.p_I[ix, iy, bottom_iz] = ti.Vector([0.0, 0.0, 0.0])
+            
+            # 荷重制御
             self.p_I[ix, iy, upper_iz].x = self.m_I[ix, iy, upper_iz] * - pos_I_y * omega_rote
             self.p_I[ix, iy, upper_iz].y = self.m_I[ix, iy, upper_iz] * pos_I_x * omega_rote
+            self.p_I[ix, iy, upper_iz].z = self.m_I[ix, iy, upper_iz] * self.ave_p_z_upper[_iz] / self.ave_m_z_upper[_iz]
+            
+            # 変位制御
+            # self.p_I[ix, iy, upper_iz] = self.m_I[ix, iy, upper_iz] * ti.Vector([- pos_I_y, pos_I_x, 0.0]) * omega_rote
             
             
                     
@@ -164,13 +192,18 @@ class elas_body():
             self.pos_p[p] += dt * self.vel_p[p]
             self.C_p[p] = new_C_p
     
+    
     @ti.kernel
     def cal_base_z_upper(self):
-        self.ave_z_upper[None] = 0.0
+        ave_z_upper = 0.0
         for _p in range(num_p_upper):
             p = p_upper[_p]
-            self.ave_z_upper[None] += self.pos_p[p].z / num_p_upper
-        self.base_z_upper[None] = int((self.ave_z_upper[None] - area_start.z) * inv_dx - 0.5)
+            ave_z_upper += self.pos_p[p].z / num_p_upper
+        self.base_z_upper[None] = int((ave_z_upper - area_start.z) * inv_dx - 0.5)
+        
+        
+    
+            
         
         
         
@@ -208,11 +241,15 @@ def main():
     for time_step in range(max_number):
         body.p_I.fill(0)
         body.m_I.fill(0)
+        body.ave_p_z_upper.fill(0)
+        body.ave_m_z_upper.fill(0)
+        body.num_p_upper.fill(0)
         
         body.cal_base_z_upper()
         with ti.Tape(body.total_energy):
             body.compute_total_energy()
         body.p2g()
+        body.cal_ave_p_z()
         body.grid_op()
         body.g2p()
         if time_step % output_span == 0:
