@@ -281,24 +281,26 @@ class twistWire(SOLID_P2Q):
         self.p_z_add.fill(0)
         
         
-    # @ti.kernel
-    # def cal_rigid_upper(self) :
-    #     for _p in range(self.num_p_add) :
-    #         p = self.p_add[_p]
-    #         self.m_
+    
+    @ti.kernel
+    def plus_vel_pos_p(self) :
+        beta = 0.5 * self.dt * self.alpha_Dum[None]
+        for p in range(self.num_p_s) :
+            if self.pN_fix[p] == self.FIX :
+                self.vel_p_s[p] = [0.0, 0.0, 0.0]
+            elif self.pN_fix[p] == self.ADD :
+                self.vel_p_s[p].x = OMEGA * (- self.pos_p_s[p].y)
+                self.vel_p_s[p].y = OMEGA * self.pos_p_s[p].x
+                self.vel_p_s[p].z = 0.0
+            elif self.pN_fix[p] == self.FREE :
+                self.vel_p_s[p] = (1 - beta) / (1 + beta) * self.vel_p_s[p] + self.dt * (self.f_int_p_s[p]) / (self.m_p_s[p] * (1 + beta))
+                
+                    
         
        
     @ti.kernel    
     def p2g(self) :
-        beta = 0.5 * self.dt * self.alpha_Dum[None]
         for p in range(self.num_p_s) :
-            # self.vel_p_s[p] = (1 - beta) / (1 + beta) * self.vel_p_s[p] + self.dt * (self.f_int_p_s[p]) / (self.m_p_s[p] * (1 + beta))
-            
-            
-            # if self.pN_fix[p] == self.ADD : 
-            #     self.m_add[None] += self.m_p_s[p]
-            #     self.p_z_add[None] += self.m_p_s[p] * self.vel_p_s[p].z
-                
             base = ti.cast((self.pos_p_s[p] - self.area_start) * self.inv_dx - 0.5, ti.i32)
             fx = (self.pos_p_s[p] - self.area_start) * self.inv_dx - ti.cast(base, float)
             w = [0.5 * (1.5 - fx)**2, 0.75 - (fx - 1)**2, 0.5 * (fx - 0.5)**2]
@@ -309,11 +311,11 @@ class twistWire(SOLID_P2Q):
                         I = ti.Vector([i, j, k])
                         dist = (float(I) - fx) * self.dx
                         NpI = w[i].x * w[j].y * w[k].z
-                        self.m_I[ix, iy, iz] += NpI * self.m_p_s[p]
-                        self.p_I[ix, iy, iz] += NpI * ( (1 - beta) * self.m_p_s[p] * (self.vel_p_s[p] + self.C_p_s[p] @ dist) + self.dt * self.f_int_p_s[p]) / (1 + beta)
-                        # self.m_I[ix, iy, iz] += NpI * self.m_p_s_MPM[p]
+                        # self.m_I[ix, iy, iz] += NpI * self.m_p_s[p]
+                        # self.p_I[ix, iy, iz] += NpI * ( (1 - beta) * self.m_p_s[p] * (self.vel_p_s[p] + self.C_p_s[p] @ dist) + self.dt * self.f_int_p_s[p]) / (1 + beta)
+                        self.m_I[ix, iy, iz] += NpI * self.m_p_s_MPM[p]
+                        self.p_I[ix, iy, iz] += NpI * ( self.m_p_s_MPM[p] * (self.vel_p_s[p] + self.C_p_s[p] @ dist) )
                         # self.p_I[ix, iy, iz] += NpI * ( (1 - beta) * self.m_p_s_MPM[p] * (self.vel_p_s[p] + self.C_p_s[p] @ dist) + self.dt * self.f_int_p_s[p]) / (1 + beta)
-                        # self.p_I[ix, iy, iz] += NpI * ( self.m_p_s_MPM[p] * (self.vel_p_s[p] + self.C_p_s[p] @ dist) )
                         
                         
     @ti.kernel
@@ -399,6 +401,7 @@ class twistWire(SOLID_P2Q):
             self.clear()
             self.cal_f_int_p_s()
             self.cal_alpha_Dum()
+            self.plus_vel_p_s()
             self.p2g()
             self.diri_p_I()
             self.g2p()
